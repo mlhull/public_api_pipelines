@@ -9,18 +9,27 @@
 
 ## Description
 
-This repository contains multiple ETL examples that source data from public APIs. Each pipeline uses Apache Airflow and Python applications to extract data from sources, handle HTTP exceptions, transform data, and load it to AWS S3 targets.
+This repository contains multiple ETL examples that source data from public APIs:
+  - Ticketmaster pipeline curates data on upcoming events located in a defined market
+  - Spotify pipeline curates data on top tracks associated with an artist of interest
+
+Each pipeline uses Apache Airflow ('Airflow') and Python applications to extract data from sources, handle HTTP exceptions, transform data, and load it to AWS S3 targets.
 
 ## Features
-- **Airflow Orchestration**: Utilize Apache Airflow to schedule and manage your ETL workflows.
+- **Airflow Orchestration**: Utilize Airflow to schedule and manage your ETL workflows. This includes leveraging Airflow's Xcoms to transfer data between tasks and SimpleHTTPOperator to handle API calls (see [Spotify pipeline](https://github.com/mlhull/public_api_pipelines/tree/main/spotify_tracks))
 - **API Authentication**: Handle use cases requiring API authentication to securely access data.
 
 ## Installation
-- Install Airflow. I recommend using Astro's Docker Image because, as one of many benefits, this ensures you're using the last instance of Airflow.
-- Create AWS service account with permissions to interact S3.
-- Ensure there is a connection between AWS Cloud Services and your Airflow instance.
-- Obtain access from source data systems to make API calls:
-  -- Ticketmaster: The API is token-based. See [here](https://developer.ticketmaster.com/products-and-docs/apis/getting-started/) for API documentation and details on obtaining access. To note, the pipeline in this repository used the Discovery API.
+1. Install Airflow. I recommend using Astro's Docker Image, as it ensures you're using the latest version of Airflow.
+2. Create AWS service account with permissions to interact S3.
+    - Ensure the bucket is set up in S3 to receive output files. This should be captured in Airflow as an environment variable.
+3. Ensure there is a connection between AWS Cloud Services and your Airflow instance.
+4. Obtain access from source data systems to make API calls and set up connections in Aiwflow:
+    - Ticketmaster: The API is token-based. See [here](https://developer.ticketmaster.com/products-and-docs/apis/getting-started/) for API documentation and details on obtaining access. To note, the pipeline in this repository used the Discovery API. You will need to set up 1 connection in Airflow for this pipeline to get the data (GET request).
+    - Spotify: The pipeline featured in this repository uses the Client Credential authorization workflow to interact with the Spotify API. See [here](https://developer.spotify.com/documentation/web-api/concepts/authorization) for API documentation and details on obtaining access. To note, you will set up 2 connections in Airflow for this pipeline: 1 to get the token (POST request) and 1 to get the data (GET request).
+5. Download the pipeline dag files into your Airflow dag folder, and the import module files into your Airflow include folder.
+    - [Ticketmaster pipeline files](https://github.com/mlhull/public_api_pipelines/tree/main/ticketmaster_events)
+    - [Spotify pipeline files](https://github.com/mlhull/public_api_pipelines/tree/main/spotify_tracks)
 
 ## Usage
 1. Trigger the DAG in Apache Airflow to start the pipeline. Make sure any application files containing custom functions are imported to the DAG. 
@@ -28,6 +37,7 @@ This repository contains multiple ETL examples that source data from public APIs
 
 ## Public APIs
 1. [Ticketmaster Discovery API](https://developer.ticketmaster.com/products-and-docs/apis/discovery-api/v2/)
+2. [Spotify API](https://developer.spotify.com/documentation/web-api)
 
 
 
