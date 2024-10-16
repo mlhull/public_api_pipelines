@@ -28,7 +28,7 @@ Each pipeline uses Apache Airflow ('Airflow') and Python applications to extract
 5. Obtain access from source data systems to make API calls and set up connections in Aiwflow:
     - Ticketmaster: The API is token-based. See [here](https://developer.ticketmaster.com/products-and-docs/apis/getting-started/) for API documentation and details on obtaining access. To note, the pipeline in this repository used the Discovery API. You will need to set up 1 connection in Airflow for this pipeline to get the data (GET request).
     - Spotify: The pipeline featured in this repository uses the Client Credential authorization workflow to interact with the Spotify API. See [here](https://developer.spotify.com/documentation/web-api/concepts/authorization) for API documentation and details on obtaining access. To note, you will set up 2 connections in Airflow for this pipeline: 1 to get the token (POST request) and 1 to get the data (GET request).
-6. Download the pipeline dag files into your Airflow dag folder, and the [api_etl_modue file](https://github.com/mlhull/public_api_pipelines/blob/main/api_etl_module)
+6. Download the pipeline dag files into your Airflow dag folder, and the [api_etl_module file](https://github.com/mlhull/public_api_pipelines/blob/main/api_etl_module)
     - [Ticketmaster pipeline files](https://github.com/mlhull/public_api_pipelines/tree/main/ticketmaster_events)
     - [Spotify pipeline files](https://github.com/mlhull/public_api_pipelines/tree/main/spotify_tracks)
 
