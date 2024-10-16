@@ -1,0 +1,221 @@
+import requests #make api calls
+import pandas as pd #for data manipulation
+from requests.adapters import HTTPAdapter #to mount http session with retry rules
+from urllib3.util.retry import Retry #to set up retry rules for http session
+import logging #to capture errors
+import io #to create buffer object
+import boto3 #to interact with s3
+import json #to serialize data
+from airflow.providers.http.hooks.http import HttpHook #to get api client secret + id
+import pandas as pd 
+import logging 
+
+##grab connection secert + id
+def get_client_secret_id(**kwargs): #kwargs parameter lets us access airflow task instance to use xcoms
+    #grab connection from airflow ui
+    http_conn_id = kwargs.get('http_conn_id') 
+    logging.info(f"Received http_conn_id: {http_conn_id}")
+
+    hook = HttpHook(http_conn_id=http_conn_id)
+
+    #get client_id and client_secret
+    connection = hook.get_connection(hook.http_conn_id)
+    extras = connection.extra_dejson
+    logging.info(f"Received extras: {extras}")
+    client_id = extras.get('client_id')
+    client_secret = extras.get('client_secret')
+    
+    #push xcom to next task
+    kwargs['ti'].xcom_push(key='client_id', value=client_id)
+    kwargs['ti'].xcom_push(key='client_secret', value=client_secret)
+
+##udf for request session with retry object (incl rules) attached to it. This includes only running if there are server side errors
+def retry_session(retries = 3, backoff_factor = 1, status_forcelist = (500, 502, 503, 504)):
+    
+    #create session request object
+    session = requests.Session()
+
+    #pull in retry rules
+    retry = Retry(
+        total = retries,
+        backoff_factor = backoff_factor,
+        status_forcelist = status_forcelist
+    )
+
+    #create a adapter with the retry rules to mount to the URL session
+    adapter = HTTPAdapter(max_retries = retry)
+
+    #mount the adapter to the http session
+    session.mount('http://', adapter)
+
+    #return the session as an object
+    return session
+
+##udf to call api to stage data or - based on status code - trigger retries and/or print error. 
+def api_call(url, s3_stage, date_only, aws_key, aws_secret, file_name):
+    
+    #pull in session object that includes retry rules
+    session = retry_session()
+    
+    try:
+        response = session.get(url) #use reqeust session with retry rules
+        response.raise_for_status()  #raises bad http error codes
+        data = response.json() #returns data as json if valid call made
+        data_json = json.dumps(data) #serialize the data
+
+        #set up s3 client
+        s3_client = boto3.client('s3',
+        aws_access_key_id=aws_key,
+        aws_secret_access_key=aws_secret)
+
+        #upload to s3 bucket
+        s3_client.put_object(
+            Bucket=s3_stage.split('/')[2],
+            Key=f'{file_name}{date_only}.json',
+            Body=data_json
+        )
+        return True 
+    
+    except requests.exceptions.RequestException as e:
+        logging.exception(f"API request failed: {e}") #generate logging error message to help clarify issue
+        return False
+    
+##udf to call api to stage data or - based on status code - trigger retries and/or print error. 
+def api_call_with_token(url, s3_stage, date_only, aws_key, aws_secret, file_name, params=None, **kwargs):
+
+    #grab auth token header keyword
+    auth_token_header = kwargs.get('auth_token_header')
+    #make sure it's prefixed with Bearer
+    if not auth_token_header.startswith("Bearer "):
+        auth_token_header = f"Bearer {auth_token_header}"
+
+    #pull in session object that includes retry rules
+    session = retry_session()
+    
+    try:
+        response = session.get(url,headers={'Authorization': auth_token_header}, params=params) #use request session with retry rules
+        response.raise_for_status()  #raises bad http error codes
+        data = response.json() #returns data as json if valid call made
+        data_json = json.dumps(data) #serialize the data
+
+        #set up s3 client
+        s3_client = boto3.client('s3',
+        aws_access_key_id=aws_key,
+        aws_secret_access_key=aws_secret)
+
+        #upload to s3 bucket
+        s3_client.put_object(
+            Bucket=s3_stage.split('/')[2],
+            Key=f'{file_name}{date_only}.json',
+            Body=data_json
+        )
+        return True 
+    
+    except requests.exceptions.RequestException as e:
+        logging.exception(f"API request failed: {e}") #generate logging error message to help clarify issue
+        return False
+
+#for ticketmaster pipeline; udf to trigger this code only if api_call doesn't error. output transformed and stored in s3
+def tm_transform_and_export(s3_stage, date_only, s3_results, aws_key, aws_secret, file_name):
+    
+    buffer = io.BytesIO()  #create buffer object to receive json file
+
+    #set up the s3 client
+    s3_client = boto3.client(
+        's3', 
+        aws_access_key_id=aws_key, 
+        aws_secret_access_key=aws_secret
+    )
+
+    #download the file from s3 to buffer
+    s3_client.download_fileobj(
+        Bucket=s3_stage.split('/')[2],  #get bucket name
+        Key=f'{file_name}{date_only}.json', #name object
+        Fileobj=buffer
+    )
+
+    buffer.seek(0)  #reset the buffer so we read from the beginning
+
+    api_data = pd.read_json(buffer)  #read buffer object as json
+
+    events_data = [] #create empty list for events data
+
+    #for every entity in the data under _embedded -> events
+    for event in api_data['_embedded']['events']:
+        event_name = event['name']
+        venue_name = event['_embedded']['venues'][0]['name']  
+        local_date = event['dates']['start']['localDate']
+
+        #create dict for event
+        events_data.append({
+            'Event Name': event_name,
+            'Venue Name': venue_name,
+            'Date': local_date
+        })
+
+    #drop dups since these rep records for same event but with diff purchase packages
+    events_df = pd.DataFrame(events_data).drop_duplicates()  
+
+    #push df to final bucket
+    events_df.to_parquet(
+        f'{s3_results}/{file_name}{date_only}.parquet.gzip',  
+        compression='gzip',  
+        engine='pyarrow',
+        storage_options={'key': aws_key, 'secret': aws_secret}
+    )
+    
+    return events_df
+
+##for spotify transform and load
+def s_transform_and_export(aws_key, aws_secret, s3_stage, file_name, date_only, s3_results):
+
+    buffer = io.BytesIO()  #create buffer object to receive json file
+
+    #set up the s3 client
+    s3_client = boto3.client(
+        's3', 
+        aws_access_key_id=aws_key, 
+        aws_secret_access_key=aws_secret
+    )
+
+    #download the file from s3 to buffer
+    s3_client.download_fileobj(
+        Bucket=s3_stage.split('/')[2],  #get bucket name
+        Key=f'{file_name}{date_only}.json', #name object
+        Fileobj=buffer
+    )
+
+    buffer.seek(0)  #reset the buffer so we read from the beginning
+
+    api_data = pd.read_json(buffer)  #read buffer object as json
+
+    #create empty list
+    track_data = []
+
+    #iterate through track for data points of interest
+    for track in api_data['tracks']:
+        artist_name = track['artists'][0]['name']
+        album_name = track['album']['name']
+        album_release_date = track['album']['release_date']
+        track_name = track['name']
+
+        #add data points to list
+        track_data.append({
+            'Artist Name': artist_name,
+            'Album Name': album_name,
+            'Album Release Date': album_release_date,
+            'Track Name': track_name
+        })
+
+    #transform to pandas df
+    track_data_df = pd.DataFrame(track_data)
+
+    #push df to final bucket
+    track_data_df.to_parquet(
+            f'{s3_results}/{file_name}{date_only}.parquet.gzip',  
+            compression='gzip',  
+            engine='pyarrow',
+            storage_options={'key': aws_key, 'secret': aws_secret}
+        )
+        
+    return track_data_df
